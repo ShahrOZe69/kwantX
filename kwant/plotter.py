@@ -1552,8 +1552,9 @@ def mask_interpolate(coords, values, a=None, method='nearest', oversampling=3):
 
     Returns
     -------
-    array : 2d NumPy array
-        The interpolated values.
+    array : ndarray
+        The interpolated values.  The number of dimensions matches that of
+        ``coords``.
     min, max : vectors
         The real-space coordinates of the two extreme ([0, 0] and [-1, -1])
         points of ``array``.
@@ -1624,8 +1625,8 @@ def mask_interpolate(coords, values, a=None, method='nearest', oversampling=3):
 def map(sys, value, colorbar=True, cmap=None, vmin=None, vmax=None, a=None,
         method='nearest', oversampling=3, num_lead_cells=0, file=None,
         show=True, dpi=None, fig_size=None, ax=None, pos_transform=None,
-        background='#e0e0e0'):
-    """Show interpolated map of a function defined for the sites of a system.
+        background='#e0e0e0', *, interpolate=True):
+    """Show map of a function defined for the sites of a 2D or 3D system.
 
     Create a pixmap representation of a function of the sites of a system by
     calling `~kwant.plotter.mask_interpolate` and show this pixmap using
@@ -1680,6 +1681,10 @@ def map(sys, value, colorbar=True, cmap=None, vmin=None, vmax=None, a=None,
         Transformation to be applied to the site position.
     background : matplotlib color spec
         Areas without sites are filled with this color.
+    interpolate : bool, optional
+        If ``True`` (default) the values are interpolated on a regular grid
+        before plotting.  If ``False`` the values are shown directly on the
+        site positions using ``kwant.plotter.plot``.
 
     Returns
     -------
@@ -1708,8 +1713,9 @@ def map(sys, value, colorbar=True, cmap=None, vmin=None, vmax=None, a=None,
     if pos_transform is not None:
         coords = np.apply_along_axis(pos_transform, 1, coords)
 
-    if coords.shape[1] != 2:
-        raise ValueError('Only 2D systems can be plotted this way.')
+    dim = coords.shape[1]
+    if dim not in (2, 3):
+        raise ValueError('Only 2D or 3D systems can be plotted this way.')
 
     if callable(value):
         value = [value(site[0]) for site in sites]
@@ -1718,46 +1724,71 @@ def map(sys, value, colorbar=True, cmap=None, vmin=None, vmax=None, a=None,
             raise ValueError('List of values is only allowed as input '
                              'for finalized systems.')
     value = np.array(value)
-    with _common.reraise_warnings():
-        img, unmasked_data, _min, _max = mask_interpolate(coords, value,
-                                                       a, method, oversampling)
 
-    # Calculate the min/max bounds for the colormap.
-    # User-provided values take precedence.
-    if _p.engine != "matplotlib":
-        unmasked_data = img.ravel()
-    else:
-        unmasked_data = img[~img.mask].data.flatten()
-    unmasked_data = unmasked_data[~np.isnan(unmasked_data)]
-    new_vmin, new_vmax = percentile_bound(unmasked_data, vmin, vmax)
-    overflow_pct = 100 * np.sum(unmasked_data > new_vmax) / len(unmasked_data)
-    underflow_pct = 100 * np.sum(unmasked_data < new_vmin) / len(unmasked_data)
-    if (vmin is None and underflow_pct) or (vmax is None and overflow_pct):
-        msg = (
-            'The plotted data contains ',
-            '{:.2f}% of values overflowing upper limit {:g} '
-                .format(overflow_pct, new_vmax)
-                if overflow_pct > 0 else '',
-            'and ' if overflow_pct > 0 and underflow_pct > 0 else '',
-            '{:.2f}% of values underflowing lower limit {:g} '
-                .format(underflow_pct, new_vmin)
-                if underflow_pct > 0 else '',
-        )
-        warnings.warn(''.join(msg), RuntimeWarning, stacklevel=2)
-    vmin, vmax = new_vmin, new_vmax
+    if interpolate:
+        with _common.reraise_warnings():
+            img, unmasked_data, _min, _max = mask_interpolate(coords, value,
+                                                           a, method, oversampling)
 
-    if _p.engine == "matplotlib":
-        fig = _map_matplotlib(syst, img, colorbar, _max, _min,  vmin, vmax,
-                        overflow_pct, underflow_pct, cmap, num_lead_cells,
-                        background, dpi, fig_size, ax, file)
-    elif _p.engine == "plotly":
-        fig = _map_plotly(syst, img, colorbar, _max, _min,  vmin, vmax,
-                          overflow_pct, underflow_pct, cmap, num_lead_cells,
-                          background)
-    elif _p.engine is None:
-        raise RuntimeError("Cannot use map() without a plotting lib installed")
+        # Calculate the min/max bounds for the colormap.
+        # User-provided values take precedence.
+        if _p.engine != "matplotlib":
+            unmasked_data = img.ravel()
+        else:
+            unmasked_data = img[~img.mask].data.flatten()
+        unmasked_data = unmasked_data[~np.isnan(unmasked_data)]
+        new_vmin, new_vmax = percentile_bound(unmasked_data, vmin, vmax)
+        overflow_pct = 100 * np.sum(unmasked_data > new_vmax) / len(unmasked_data)
+        underflow_pct = 100 * np.sum(unmasked_data < new_vmin) / len(unmasked_data)
+        if (vmin is None and underflow_pct) or (vmax is None and overflow_pct):
+            msg = (
+                'The plotted data contains ',
+                '{:.2f}% of values overflowing upper limit {:g} '
+                    .format(overflow_pct, new_vmax)
+                    if overflow_pct > 0 else '',
+                'and ' if overflow_pct > 0 and underflow_pct > 0 else '',
+                '{:.2f}% of values underflowing lower limit {:g} '
+                    .format(underflow_pct, new_vmin)
+                    if underflow_pct > 0 else '',
+            )
+            warnings.warn(''.join(msg), RuntimeWarning, stacklevel=2)
+        vmin, vmax = new_vmin, new_vmax
+
+        if _p.engine == "matplotlib":
+            if dim == 3:
+                fig = _map_matplotlib_3d(syst, img, colorbar, _max, _min, vmin, vmax,
+                                     overflow_pct, underflow_pct, cmap, num_lead_cells,
+                                     background, dpi, fig_size, ax, file)
+            else:
+                fig = _map_matplotlib(syst, img, colorbar, _max, _min,  vmin, vmax,
+                                overflow_pct, underflow_pct, cmap, num_lead_cells,
+                                background, dpi, fig_size, ax, file)
+        elif _p.engine == "plotly":
+            if dim == 3:
+                fig = _map_plotly_3d(syst, img, colorbar, _max, _min, vmin, vmax,
+                                   overflow_pct, underflow_pct, cmap, num_lead_cells,
+                                   background)
+            else:
+                fig = _map_plotly(syst, img, colorbar, _max, _min,  vmin, vmax,
+                                  overflow_pct, underflow_pct, cmap, num_lead_cells,
+                                  background)
+        elif _p.engine is None:
+            raise RuntimeError("Cannot use map() without a plotting lib installed")
+        else:
+            raise RuntimeError("map() does not support engine '{}'".format(_p.engine))
+
     else:
-        raise RuntimeError("map() does not support engine '{}'".format(_p.engine))
+        if _p.engine is None:
+            raise RuntimeError("Cannot use map() without a plotting lib installed")
+        fig = plot(syst, num_lead_cells=num_lead_cells, unit='pt',
+                   site_symbol='o', site_size=None,
+                   site_color=value, hop_lw=0,
+                   cmap=cmap, colorbar=colorbar, file=None, show=False,
+                   dpi=dpi, fig_size=fig_size, ax=ax,
+                   lead_site_symbol='s', lead_site_size=0.501,
+                   lead_hop_lw=0, lead_site_lw=0,
+                   lead_color='black', lead_site_edgecolor=None,
+                   pos_transform=pos_transform)
 
     _maybe_output_fig(fig, file=file, show=show)
 
@@ -1806,6 +1837,59 @@ def _map_plotly(syst, img, colorbar, _max, _min,  vmin, vmax, overflow_pct,
     return fig
 
 
+def _map_plotly_3d(syst, img, colorbar, _max, _min, vmin, vmax, overflow_pct,
+                   underflow_pct, cmap, num_lead_cells, background):
+
+    border = 0.5 * (_max - _min) / (np.asarray(img.shape) - 1)
+    _min -= border
+    _max += border
+
+    if cmap is None:
+        cmap = _p.kwant_red_plotly
+
+    xs = np.linspace(_min[0], _max[0], img.shape[0])
+    ys = np.linspace(_min[1], _max[1], img.shape[1])
+    zs = np.linspace(_min[2], _max[2], img.shape[2])
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+
+    values = img
+    if isinstance(values, np.ma.MaskedArray):
+        mask = ~values.mask
+        X = X[mask]
+        Y = Y[mask]
+        Z = Z[mask]
+        values = values[mask]
+    else:
+        X = X.ravel()
+        Y = Y.ravel()
+        Z = Z.ravel()
+        values = values.ravel()
+
+    scatter = _p.plotly_graph_objs.Scatter3d(
+        x=X, y=Y, z=Z, mode='markers',
+        marker=dict(size=2,
+                    color=values,
+                    colorscale=_p.convert_cmap_list_mpl_plotly(cmap),
+                    cmin=vmin, cmax=vmax,
+                    showscale=colorbar))
+
+    fig = _p.plotly_graph_objs.Figure(data=[scatter])
+    fig.layout.scene.bgcolor = background
+    fig.layout.showlegend = False
+
+    if num_lead_cells:
+        fig = _plot_plotly(syst, num_lead_cells, site_symbol='no symbol',
+                           hop_lw=0, lead_site_symbol='s',
+                           lead_site_size=0.501, lead_site_lw=0,
+                           lead_hop_lw=0, lead_color='black', colorbar=False,
+                           show=False, fig=fig, unit='pt', site_size=None,
+                           site_color=None, site_edgecolor=None, site_lw=0,
+                           hop_color=None, lead_site_edgecolor=None,
+                           pos_transform=None, cmap=None, file=None)
+
+    return fig
+
+
 def _map_matplotlib(syst, img, colorbar, _max, _min,  vmin, vmax,
                     overflow_pct, underflow_pct, cmap, num_lead_cells,
                     background, dpi, fig_size, ax, file):
@@ -1844,6 +1928,64 @@ def _map_matplotlib(syst, img, colorbar, _max, _min,  vmin, vmax,
         elif overflow_pct > 0:
             extend = 'max'
         fig.colorbar(image, extend=extend)
+
+    return fig
+
+
+def _map_matplotlib_3d(syst, img, colorbar, _max, _min, vmin, vmax,
+                       overflow_pct, underflow_pct, cmap, num_lead_cells,
+                       background, dpi, fig_size, ax, file):
+
+    border = 0.5 * (_max - _min) / (np.asarray(img.shape) - 1)
+    _min -= border
+    _max += border
+
+    if ax is None:
+        fig = _make_figure(dpi, fig_size, use_pyplot=(file is None))
+        warnings.filterwarnings('ignore', message=r'.*rotation.*')
+        ax = fig.add_subplot(1, 1, 1, projection='3d')
+        warnings.resetwarnings()
+    else:
+        fig = None
+
+    if cmap is None:
+        cmap = _p.kwant_red_matplotlib
+
+    xs = np.linspace(_min[0], _max[0], img.shape[0])
+    ys = np.linspace(_min[1], _max[1], img.shape[1])
+    zs = np.linspace(_min[2], _max[2], img.shape[2])
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+
+    values = img
+    if isinstance(values, np.ma.MaskedArray):
+        mask = ~values.mask
+        X = X[mask]
+        Y = Y[mask]
+        Z = Z[mask]
+        values = values[mask]
+    else:
+        X = X.ravel()
+        Y = Y.ravel()
+        Z = Z.ravel()
+        values = values.ravel()
+
+    sc = ax.scatter(X, Y, Z, c=values, cmap=cmap, vmin=vmin, vmax=vmax, s=4)
+
+    if num_lead_cells:
+        plot(syst, num_lead_cells, site_symbol='no symbol', hop_lw=0,
+             lead_site_symbol='s', lead_site_size=0.501, lead_site_lw=0,
+             lead_hop_lw=0, lead_color='black', colorbar=False, ax=ax)
+
+    ax.set_facecolor(background)
+
+    min_ = np.min([_min, _max], axis=0)
+    max_ = np.max([_min, _max], axis=0)
+    m = (min_ + max_) / 2
+    w = np.max(max_ - min_) / 2
+    ax.auto_scale_xyz(*[(i - w, i + w) for i in m], had_data=True)
+
+    if colorbar and fig is not None:
+        fig.colorbar(sc)
 
     return fig
 
